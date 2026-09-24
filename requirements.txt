@@ -1,6 +1,0 @@
-requests
-pandas
-openpyxl
-lxml
-python-docx
-python-dotenv
