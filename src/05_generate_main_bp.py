@@ -1,0 +1,4 @@
+from .clients import Claude
+from .common import get,put,safe
+def run(process,persona,country,conversation_id,**kwargs):
+ sid=safe(conversation_id); gts=get(f'{process}_{persona}_{country}_markdown_gts_{sid}.txt'); steps=get(f'{country}_{persona}_{process}_{sid}_country_segregation.json'); job=get(f'{process}_{persona}_{country}_{sid}_indexfile_content.txt'); prompt=f'Create a Workday EUTM document in British English for {process}, {persona}, {country}. GTS is the main procedural source. Extracted steps only enrich conditions and owners. Job aid only informs Introduction. Output Markdown beginning # Business Process, with Introduction, Validations, Scenarios Covered, Initiation and standalone scenarios. Do not expose test terminology.\nGTS\n{gts}\nSTEPS\n{steps}\nJOB AID\n{job}'; text=Claude().complete(prompt); name=f'{process}_{persona}_{country}_{sid}_EUTM_response.txt'; put(name,text); return {'main_eutm':name}
