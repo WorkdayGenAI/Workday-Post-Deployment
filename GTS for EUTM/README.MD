@@ -1,431 +1,839 @@
-## EUTM Agent (End-User Training Material Generator)
+# EUTM Agent for GenWizard Agent Manager
 
-### Appendix (Quick Reference)
+## Appendix: Quick Reference
 
-This appendix sits at the top on purpose so technical and non-technical readers can understand the agent before reviewing the detailed documentation.
+This README explains the EUTM agent and guides a builder through recreating it in GenWizard Agent Manager.
 
-#### A. Table of Contents
-- [What Is This Agent?](#what-is-this-agent)
-- [Quick Summary](#quick-summary)
-- [Business Value — Time Savings](#business-value--time-savings)
-- [Key Features](#key-features)
-- [How the Agent Works](#how-the-agent-works)
-- [Architecture Diagram](#architecture-diagram)
-- [Architecture Explanation](#architecture-explanation)
-- [Project Structure](#project-structure)
-- [Technology Stack](#technology-stack)
-- [Prerequisites](#prerequisites)
-- [Installation Guide](#installation-guide)
-- [Environment Variables](#environment-variables)
-- [Running the Agent](#running-the-agent)
-- [Usage Examples](#usage-examples)
-- [Dependencies](#dependencies)
-- [APIs and Integrations](#apis-and-integrations)
-- [Security and Authentication](#security-and-authentication)
-- [Monitoring and Logging](#monitoring-and-logging)
-- [Testing](#testing)
-- [Troubleshooting](#troubleshooting)
-- [Assumptions, Risks and Gaps](#assumptions-risks-and-gaps)
-- [Business Value](#business-value)
-- [Executive Summary](#executive-summary)
-
-#### B. Glossary (plain English)
-
-| Term | What it means |
-|---|---|
-| **Agent** | A connected set of Agent Manager tools that automates the EUTM workflow |
-| **BP (Business Process)** | A Workday workflow such as Hire, Change Job or Create Position |
-| **EUTM** | End-User Training Material written for Workday business users |
-| **GTS** | Scenario and process-step content used as the primary procedural source |
-| **Initiating Security Group** | The role or persona that starts the Workday process |
-| **Quasar** | The search service used to retrieve mappings and training content |
-| **Workday** | The source system that provides the Business Process definition XML |
-| **Claude** | The AI model used to generate GTS and training content |
-| **Canvas** | The chat interface where the user requests and receives the result |
-| **Artefact** | An intermediate or final file stored by the Agent Manager platform |
-| **Presigned URL** | A temporary private link for downloading a generated artefact |
-| **Sub-process** | A downstream Business Process referenced by the main process |
-
-#### C. Tools at a glance
-
-| Tool file | Path | Role | Key inputs | Output |
-|---|---|---|---|---|
-| `trigger_for_aldi` | Main BP retrieval | Resolve the BP reference and retrieve Workday XML and validations | process, conversation_id, country, persona | XML and validation artefacts |
-| `GTS_for_EUTM` | GTS generation | Generate scenario and process-step content | conversationid, process, persona, country | Markdown and CSV artefacts |
-| `combined_code` | Supporting content | Retrieve matching user-training or job-aid content | process, persona, conversation_id, country | Text artefact |
-| `segregate_by_country` | Country processing | Retain process steps applicable to the selected country | conversation_id, persona, country, process | Country JSON |
-| `claude_call_for_main_bp` | Main EUTM generation | Generate the main BP training content | conversation_id, process_steps, Process, Persona, country | EUTM Markdown |
-| `combined_code_for_sub_bp` | Sub-BP extraction | Retrieve sub-process definitions and validations | conversation_id, persona, country, process | Sub-process JSON files |
-| `claude_call_for_subbp_three` | Sub-BP generation | Generate sub-process training sections | conversation_id, persona, country, process | Sub-process task JSON |
-| `document_generation_final` | Document generation | Merge all content into Word | usecase, conversation_id, Persona, country, process | DOCX and URL |
-| `workday_send_msg_to_canvas` | Delivery | Send the final result to Canvas | conversation_id, message, environment, recipient_id | Delivery confirmation |
-
-#### D. Key facts and constants
-
-| Item | Value |
-|---|---|
-| Language | Python 3 |
-| Runtime | Agent Manager platform tools |
-| Platform SDK | `core` |
-| Core libraries | requests, pandas, lxml, python-docx |
-| Quasar secret | `wd-tool-secrets` |
-| Workday secret | `wd-tool-eutm-secret-2` |
-| Claude secret | `SCA_WA_Claude_Opus_4_6` |
-| Quasar index | `wd_TSEndUserTrainingMaterials_idx` |
-| Main output | EUTM Word document |
-| Storage | `artifacts/` and `uploaded_artifacts/` |
-| Tool format | Extensionless Python modules |
-
-#### E. Reference Key
-- ✅ **Fact** — taken from the supplied EUTM tool code and workflow.
-- ⚠️ **Assumption** — inferred and clearly labelled.
-- ❓ **Unable to determine** — not present in the supplied files and not guessed.
-
-### What Is This Agent?
-
-The **EUTM agent** generates Workday End-User Training Material for a selected Business Process, country and initiating security group. It runs as a connected set of tools inside Agent Manager.
-
-The agent retrieves the Workday process definition, generates scenario-based source content, filters the process for the selected country, creates the main training content, adds supported sub-process instructions, builds a Word document and returns the download link through Canvas.
-
-**Why it exists:** Creating EUTM manually requires analysts to inspect process definitions, identify role- and country-specific paths, rewrite technical process information into training language and assemble a consistently formatted document.
-
-**Who should use it:**
-- Workday training-content teams
-- Workday functional consultants
-- Business Process analysts
-- Teams preparing country- and persona-specific training material
-
-### Quick Summary
-
-| Item | Details |
-|---|---|
-| **Purpose** | Generate Workday EUTM documents for a selected process, country and initiating role |
-| **Runtime** | Agent Manager platform tools |
-| **Inputs** | Process, persona, country, conversation ID and Canvas delivery parameters |
-| **Final output** | Downloadable Word document |
-| **Intermediate outputs** | XML, validation text, GTS Markdown, GTS CSV, country JSON, main EUTM text and sub-process JSON |
-| **External systems** | Quasar, Workday, Claude and Canvas |
-| **Storage** | Agent Manager artefacts through the `core` SDK |
-
-### Business Value — Time Savings
-
-The agent automates work that otherwise requires manual retrieval, analysis, writing and document assembly. This includes obtaining process definitions, determining country applicability, producing role-aware instructions, documenting sub-processes and creating the final Word document.
-
-No measured duration or percentage saving appears in the supplied source, so this README does not claim a specific time-saving figure.
-
-### Key Features
-
-#### 1. Retrieve the live Workday process definition
-`trigger_for_aldi` resolves the Business Process reference, calls the Workday custom report, stores the XML and extracts initiation validations.
-
-#### 2. Generate GTS content
-`GTS_for_EUTM` converts the Workday XML into scenario-driven source content and produces both Markdown and CSV outputs.
-
-#### 3. Apply country-specific processing
-`segregate_by_country` supports USA, US, AU, GB, IE, GBIE and Global. Generic steps and applicable regional steps are retained according to the tool logic.
-
-#### 4. Generate the main EUTM content
-`claude_call_for_main_bp` uses GTS as the primary procedural source, country steps for metadata, validations for a separate section, initiation data for navigation and job-aid content for introductory context.
-
-#### 5. Generate sub-process training sections
-`combined_code_for_sub_bp` retrieves referenced sub-process definitions and validations. `claude_call_for_subbp_three` converts them into business-user content while preserving the input keys.
-
-#### 6. Create the final Word document
-`document_generation_final` replaces task markers with generated sub-process content, removes unresolved markers, converts Markdown headings and tables into Word elements and creates the final DOCX artefact.
-
-#### 7. Deliver the result to Canvas
-`workday_send_msg_to_canvas` authenticates to the selected Canvas environment and sends the final document link to the original conversation.
-
-#### 8. Handle long model responses
-The Claude helpers continue when the response reaches the token limit, preventing a partial response from being treated as complete.
-
-### How the Agent Works
-
-1. The user supplies the process, persona, country and conversation information through Canvas.
-2. `trigger_for_aldi` resolves the main process and retrieves Workday XML and validations.
-3. `GTS_for_EUTM` reads the XML and creates GTS Markdown and CSV artefacts.
-4. `combined_code` retrieves matching supporting content from Quasar.
-5. `segregate_by_country` creates the country-scoped process-step JSON.
-6. `claude_call_for_main_bp` generates the main EUTM Markdown.
-7. `combined_code_for_sub_bp` retrieves and segregates downstream sub-process definitions.
-8. `claude_call_for_subbp_three` generates sub-process training sections.
-9. `document_generation_final` creates the final Word document.
-10. `workday_send_msg_to_canvas` sends the download link to Canvas.
-
-### Architecture Diagram
+### A. Build Sequence
 
 ```text
-Canvas request
-    |
-    v
-trigger_for_aldi
-    |---- Workday XML
-    |---- validations
-    v
-GTS_for_EUTM
-    |---- GTS Markdown / CSV
-    v
-combined_code ---- Quasar supporting content
-    |
-    v
-segregate_by_country
-    |---- country-scoped steps
-    v
-claude_call_for_main_bp
-    |---- main EUTM Markdown
-    v
-combined_code_for_sub_bp
-    |---- sub-process steps and validations
-    v
-claude_call_for_subbp_three
-    |---- sub-process training JSON
-    v
-document_generation_final
-    |---- EUTM DOCX and download URL
-    v
-workday_send_msg_to_canvas
-    |
-    v
-Canvas response
+1. Prepare access
+2. Add credentials to Secret Manager
+3. Upload required documents to Uploaded Artifacts
+4. Create Python tools in the Tools section
+5. Validate and approve the tools
+6. Create utility agents and attach the required tools
+7. Create the super agent
+8. Add the utility agents to the super agent in the required order
+9. Validate the complete flow
+10. Connect and run the agent from Canvas
 ```
 
-### Architecture Explanation
-
-| Component | Purpose | Inputs | Outputs | Dependencies |
-|---|---|---|---|---|
-| **Canvas** | User interaction and delivery | User request | Parameters and displayed result | Canvas APIs |
-| **Agent Manager** | Runs the connected tools | Tool prompts and attributes | Ordered execution | Host platform |
-| **core SDK** | Supplies platform services | Secret and artefact names | Secrets, files and URLs | Host platform |
-| **Quasar** | Retrieves mappings and content | Token and query payload | Reference IDs and indexed text | Quasar APIs |
-| **Workday** | Supplies process definitions | Reference ID and credentials | Business Process XML | Workday custom report |
-| **Claude** | Generates structured content | Supported source content | GTS and EUTM Markdown | Anthropic-compatible API |
-| **Word generator** | Builds the final document | Main EUTM and sub-process JSON | DOCX artefact | python-docx |
-
-### Project Structure
+### B. Agent Manager Structure
 
 ```text
-EUTM_Agent_Manager_Tools/
-├── trigger_for_aldi
-├── GTS_for_EUTM
-├── combined_code
-├── segregate_by_country
-├── claude_call_for_main_bp
-├── combined_code_for_sub_bp
-├── claude_call_for_subbp_three
-├── document_generation_final
-├── workday_send_msg_to_canvas
-├── agent_manager_manifest.json
-└── README.md
+Python scripts
+    ↓
+Tools
+    ↓
+Utility Agents
+    ↓
+Super Agent
+    ↓
+Canvas
 ```
 
-The tool files have no `.py` extension, but contain Python source. Each file exposes a public function whose name matches the tool name.
+- **Tools** are created from the Python scripts supplied with this package.
+- **Utility Agents** use the tools required for a specific stage of the EUTM process.
+- **The Super Agent** combines the utility agents into the complete EUTM workflow.
+- **Secret Manager** stores all credentials and secret configuration values.
+- **Uploaded Artifacts** stores all documents and supporting files required by the agent.
 
-### Technology Stack
+### C. Components at a Glance
 
-| Technology | Where used | Purpose |
+| Component type | Count | Purpose |
+|---|---:|---|
+| Tools | 9 | Execute the Python-based retrieval, processing, generation and delivery functions |
+| Utility Agents | 7 | Group the required tools into individual stages of the workflow |
+| Super Agent | 1 | Connect all utility agents into the complete EUTM process |
+| Secret Manager entries | Environment dependent | Securely store credentials and endpoint configuration |
+| Uploaded Artifacts | Environment dependent | Store the documents required by the tools during execution |
+
+### D. Tools at a Glance
+
+| Order | Tool | Purpose |
+|---:|---|---|
+| 1 | `trigger_for_aldi` | Resolve the main Business Process and retrieve the Workday XML and validations |
+| 2 | `GTS_for_EUTM` | Generate GTS content from the Workday XML |
+| 3 | `combined_code` | Retrieve the supporting user-training or job-aid content |
+| 4 | `segregate_by_country` | Retain the main Business Process steps applicable to the selected country |
+| 5 | `claude_call_for_main_bp` | Generate the main Business Process EUTM content |
+| 6 | `combined_code_for_sub_bp` | Retrieve and segregate the referenced sub-process definitions and validations |
+| 7 | `claude_call_for_subbp_three` | Generate the sub-process EUTM sections |
+| 8 | `document_generation_final` | Merge the main and sub-process content into the final Word document |
+| 9 | `workday_send_msg_to_canvas` | Send the generated document link to Canvas |
+
+### E. Utility Agents at a Glance
+
+| Super Agent order | Utility Agent | Tools used |
+|---:|---|---|
+| 1 | `Trigger for Aldi` | `trigger_for_aldi` |
+| 2 | `GTS for EUTM` | `GTS_for_EUTM` |
+| 3 | `Combined Code Agent 2` | `combined_code`, `segregate_by_country` |
+| 4 | `Generate_document_for_BP` | `claude_call_for_main_bp` |
+| 5 | `Combined Code for Sub BP` | `combined_code_for_sub_bp` |
+| 6 | `claude call for subbp three` | `claude_call_for_subbp_three` |
+| 7 | `document_generation_entire_EUTM` | `document_generation_final`, `workday_send_msg_to_canvas` |
+
+---
+
+## 1. What Is This Agent?
+
+The EUTM agent creates Workday End-User Training Material for a selected Business Process, initiating security group and country.
+
+The completed workflow:
+
+1. Retrieves the main Workday Business Process definition.
+2. Generates GTS scenario and step content.
+3. Retrieves supporting user-training or job-aid content.
+4. Filters process steps for the selected country.
+5. Generates the main Business Process training material.
+6. Identifies and processes relevant sub-processes.
+7. Generates sub-process training sections.
+8. Creates the final Word document.
+9. Sends the document link to Canvas.
+
+The final output is a downloadable EUTM Word document written for business users.
+
+## 2. Intended Audience
+
+This guide is intended for users who:
+
+- Have access to GenWizard Agent Manager.
+- Are authorised to create and approve tools.
+- Can create utility agents and super agents.
+- Can access Secret Manager and Uploaded Artifacts.
+- Have the approved credentials and supporting documents required by the EUTM workflow.
+
+## 3. How Agent Manager Is Used
+
+### 3.1 Tools
+
+The **Tools** section is where the supplied Python scripts are converted into Agent Manager tools.
+
+Each tool requires:
+
+- A unique tool name.
+- The matching Python source code.
+- A description.
+- The required input attributes.
+- The required packages.
+- Successful validation and approval, where required.
+
+The Python scripts are not run as a standalone VS Code project. They are entered into and executed through the Tools section of GenWizard Agent Manager.
+
+### 3.2 Utility Agents
+
+After creating the tools, create the utility agents.
+
+Each utility agent represents one stage of the EUTM workflow and is connected only to the tool or tools needed for that stage.
+
+The utility agents must be created only after their tools have been saved, validated and made available for selection.
+
+### 3.3 Super Agent
+
+The super agent combines the utility agents into the complete workflow.
+
+For this use case, create a super agent named:
+
+```text
+GTS for EUTM
+```
+
+Add the seven utility agents in the exact sequence documented in this README. The workflow is sequential because later stages depend on files created by earlier stages.
+
+## 4. Supporting Platform Components
+
+### 4.1 Secret Manager
+
+All usernames, passwords, API keys, endpoint values and other sensitive configuration must be maintained in **Secret Manager**.
+
+Do not place secret values in:
+
+- Tool source code.
+- Tool descriptions.
+- Utility Agent configurations.
+- Super Agent descriptions.
+- README files.
+- Uploaded documents.
+- Logs or screenshots.
+
+The tool source must retrieve approved values at runtime through `core.get_secret`.
+
+### 4.2 Uploaded Artifacts
+
+All documents and supporting files required by the EUTM workflow must be stored in **Uploaded Artifacts**.
+
+This includes files such as:
+
+- `initiator_file.xlsx`
+- Mapping workbooks used by the process
+- Supporting reference documents
+- Job-aid documents
+- Any additional approved file required by the tools
+
+Use the exact filenames expected by the tool source. A filename mismatch can prevent a tool from locating the required document.
+
+Tools that read documents must retrieve them using the `uploaded_artifacts/` path. Generated files may also be written to or made available through the platform's artefact storage based on the tool's output logic.
+
+## 5. Prerequisites
+
+Before building the agent, confirm that the following are available:
+
+- Access to the target GenWizard Agent Manager environment.
+- Permission to create tools.
+- Permission to validate or approve tools.
+- Permission to create Utility Agents.
+- Permission to create Super Agents.
+- Access to Secret Manager.
+- Access to Uploaded Artifacts.
+- Approved Quasar credentials.
+- Approved Workday custom-report credentials.
+- Approved model endpoint credentials.
+- Approved Canvas credentials.
+- All nine tool source files.
+- `agent_manager_manifest.json`, if supplied with the package.
+- All required supporting documents.
+
+Use a non-production environment for the first complete validation.
+
+## 6. Prepare Secret Manager
+
+Create or confirm the following Secret Manager entries. The exact secret names are required because the tools retrieve them by name.
+
+| Secret name | Required fields | Used for |
 |---|---|---|
-| Python | All tools | Implementation language |
-| `core` | All tools | Secrets, artefacts and presigned URLs |
-| requests | Integration tools | HTTP calls to Quasar, Workday, Claude and Canvas |
-| pandas | GTS and initiation processing | CSV and Excel handling |
-| lxml | XML tools | Workday XML parsing |
-| python-docx | Final generation | Word-document creation |
-| JSON | Tool hand-offs | Structured intermediate data |
-| Markdown | Generation tools | Main and sub-process content |
-
-### Prerequisites
-
-- Agent Manager environment that provides the `core` SDK.
-- Network access to the configured Quasar, Workday, Claude and Canvas endpoints.
-- Required secrets registered in Agent Manager.
-- Required Python packages enabled for each tool.
-- `initiator_file.xlsx` available in artefact storage when initiation mapping is required.
-- Tool attributes configured as listed in `agent_manager_manifest.json`.
-
-### Installation Guide
-
-These files are Agent Manager tools, not a standalone application.
-
-1. Create the nine tools in Agent Manager.
-2. Copy each extensionless source file into the corresponding tool.
-3. Configure each tool's attributes from `agent_manager_manifest.json`.
-4. Add the packages required by the imports.
-5. Register the named secrets in Agent Manager's secret store.
-6. Create the agents that invoke the tools.
-7. Connect the workflow in the documented order.
-8. Upload `initiator_file.xlsx` when required.
-9. Validate each artefact hand-off with the same process, persona, country and conversation ID.
-10. Run an end-to-end test from Canvas.
-
-### Environment Variables
-
-The tools do not use a local `.env` file. They use named secrets through `core.get_secret`.
-
-| Secret name | Required fields | Used by |
-|---|---|---|
-| `wd-tool-secrets` | `quasar_baseurl`, `quasar_username`, `quasar_password` | Quasar tools |
-| `wd-tool-eutm-secret-2` | `eutm_report_Url`, `eutm_report_username`, `eutm_report_password` | Workday retrieval tools |
-| `SCA_WA_Claude_Opus_4_6` | `Endpoint`, `api_key`, `deployment_name` | Generation tools |
-| `workday_prod` | `url`, `username`, `password` | Production Canvas delivery |
-| `workday_CUI` | `url`, `username`, `password` | Demo or default Canvas delivery |
-| `workday_stgtest` | `url`, `username`, `password` | Stage-test Canvas delivery |
+| `wd-tool-secrets` | `quasar_baseurl`, `quasar_username`, `quasar_password` | Quasar authentication and retrieval |
+| `wd-tool-eutm-secret-2` | `eutm_report_Url`, `eutm_report_username`, `eutm_report_password` | Workday Business Process report retrieval |
+| `SCA_WA_Claude_Opus_4_6` | `Endpoint`, `api_key`, `deployment_name` | GTS and EUTM generation |
+| `workday_CUI` | `url`, `username`, `password` | Default or demo Canvas delivery |
 | `workday_dev` | `url`, `username`, `password` | Development Canvas delivery |
+| `workday_stgtest` | `url`, `username`, `password` | Stage-test Canvas delivery |
+| `workday_prod` | `url`, `username`, `password` | Production Canvas delivery |
 
-Actual secret values are intentionally excluded.
+### Secret Manager Validation
 
-### Running the Agent
+For every secret:
 
-These are platform functions invoked by Agent Manager, not command-line programs.
+1. Confirm the secret name matches the source code exactly.
+2. Confirm all required fields are present.
+3. Confirm the credential has access to the intended environment.
+4. Confirm the tool can retrieve the secret without displaying its content.
+5. Do not copy secret values into test notes or screenshots.
 
-```python
-trigger_for_aldi(
-    process="Create Position",
-    conversation_id="<conversation-id>",
-    requester_user_email_id="<requester-email>",
-    environment="demo",
-    country="AU",
-    persona="Personnel Leader"
-)
-```
+## 7. Prepare Uploaded Artifacts
 
-```python
-GTS_for_EUTM(
-    conversationid="<conversation-id>",
-    process="Create Position",
-    persona="Personnel Leader",
-    country="AU"
-)
-```
+Before testing the tools, upload all required documents to **Uploaded Artifacts**.
 
-```python
-document_generation_final(
-    usecase="EUTM",
-    conversation_id="<conversation-id>",
-    Persona="Personnel Leader",
-    country="AU",
-    process="Create Position"
-)
-```
+### Required File Checklist
 
-The same conversation ID must be used throughout the workflow so each tool can locate the files generated by the preceding tools.
-
-### Usage Examples
-
-#### Example A — Generate AU training material for Create Position
-- **Input:** Process = Create Position, Persona = Personnel Leader, Country = AU.
-- **Processing:** The agent retrieves the process definition, generates GTS, retains AU and generic steps, creates main and sub-process content and builds the Word document.
-- **Output:** A downloadable EUTM Word document delivered through Canvas.
-
-#### Example B — Generate GBIE training material
-- **Input:** A supported process, selected persona and Country = GBIE.
-- **Processing:** Country segregation retains GB, IE, GBIE and generic steps according to the specified regional logic.
-- **Output:** A GBIE-scoped EUTM document.
-
-#### Example C — Generate Global training material
-- **Input:** A supported process, selected persona and Country = Global.
-- **Processing:** The main country-segregation tool includes all main-process steps. Content generation remains limited to the supplied evidence.
-- **Output:** A Global EUTM document.
-
-### Dependencies
-
-| Dependency | Purpose | Criticality |
+| File | Required when | Purpose |
 |---|---|---|
-| `core` | Secrets, artefacts and URLs | Critical |
-| requests | External HTTP calls | Critical |
-| pandas | GTS CSV and initiator workbook handling | Critical for relevant tools |
-| lxml | Workday XML parsing | Critical for XML tools |
-| python-docx | Final Word document generation | Critical for document generation |
-| json, re, io, uuid, html | Parsing, buffers, sanitisation and IDs | Supporting |
+| `initiator_file.xlsx` | Main EUTM generation uses Initiation mapping | Provides the starting point for the selected Business Process and persona |
+| Business Process mapping workbook | Required by the configured Quasar source | Resolves Workday Business Process references |
+| User-training index workbook | Required by the configured Quasar source | Resolves job-aid or user-training content |
+| Supporting job-aid documents | When matching content exists | Provides introductory context |
+| Other approved reference files | When required by tool logic | Supports specialised Business Processes |
 
-Exact dependency versions are not specified in the supplied files.
+### Upload Rules
 
-### APIs and Integrations
+- Keep the expected filename unchanged.
+- Do not add version suffixes unless the tool is updated to use them.
+- Do not store credentials in uploaded documents.
+- Confirm the uploaded file opens successfully.
+- Confirm the correct sheet names exist in Excel files.
+- Replace outdated files deliberately rather than keeping ambiguous duplicates.
 
-| Integration | Endpoint type | Authentication | Use |
-|---|---|---|---|
-| Quasar | Short-token endpoint | Username and password | Obtain API token |
-| Quasar | Search and generation endpoints | `apiToken` header | Retrieve references and content |
-| Workday | Custom report | HTTP Basic authentication | Retrieve process-definition XML |
-| Claude | Messages endpoint | `x-api-key` header | Generate GTS and EUTM content |
-| Canvas | Messaging endpoint | Short token in `apiToken` header | Deliver the document link |
+## 8. Create the Tools
 
-Endpoint base URLs are read from Agent Manager secrets and are not included in this README.
+Open the **Tools** section in GenWizard Agent Manager and create the following tools.
 
-### Security and Authentication
+For each tool:
 
-- Credentials are retrieved at runtime through `core.get_secret`.
-- Secret values are not embedded in the tool files or README.
-- Tokens, passwords, API keys and raw secret objects should not be logged.
-- Network calls use explicit timeouts.
-- XML parsing disables network access and external entity resolution where configured.
-- Artefact filenames are sanitised before reading or writing.
-- Presigned URLs should not be stored in source control.
+1. Select the option to create a new tool.
+2. Enter the exact tool name.
+3. Add a clear description.
+4. Paste the matching Python source code.
+5. Add the required attributes.
+6. Add the required packages.
+7. Save the tool.
+8. Run validation or certification.
+9. Resolve any reported issue.
+10. Submit and approve the tool when required.
+11. Test the tool before using it in a Utility Agent.
 
-### Monitoring and Logging
+### 8.1 Tool: `trigger_for_aldi`
 
-The tools return structured success or error dictionaries. Agent Manager can capture returned values and standard output for troubleshooting.
+**Purpose:** Resolve the main Workday Business Process reference, retrieve the Workday XML and create the validation file.
 
-No dedicated metrics platform, health-check endpoint or monitoring configuration is included in the supplied package.
+**Attributes:**
 
-### Testing
+| Name | Type | Description |
+|---|---|---|
+| `process` | str | Workday Business Process name |
+| `conversation_id` | str | Conversation identifier used across the workflow |
+| `requester_user_email_id` | str | Requesting user's email identifier |
+| `environment` | str | Runtime environment |
+| `country` | str | Country or regional scope |
+| `persona` | str | Initiating Security Group |
 
-No automated test suite is included. Validate the flow inside Agent Manager:
+**Packages:**
 
-1. Run `trigger_for_aldi` and confirm XML and validation artefacts.
-2. Run `GTS_for_EUTM` and confirm Markdown and CSV outputs.
-3. Run `combined_code` and confirm the supporting-content artefact.
-4. Run `segregate_by_country` for USA, AU, GB, IE, GBIE and Global.
-5. Run `claude_call_for_main_bp` and confirm the output begins with `# Business Process`.
-6. Run both sub-process tools and confirm their JSON keys remain aligned.
-7. Run `document_generation_final` and open the generated Word document.
-8. Run `workday_send_msg_to_canvas` and confirm delivery.
+```text
+typing
+core
+uuid
+re
+json
+requests
+html
+lxml
+```
 
-### Troubleshooting
+**Expected outputs:**
 
-| Issue | Symptoms | Likely cause | Resolution |
-|---|---|---|---|
-| Missing input | Required-input error | Attribute was not supplied | Check the manifest attribute mapping |
-| Quasar authentication failure | Token or search call fails | Secret, network or service issue | Validate `wd-tool-secrets` without exposing values |
-| Workday retrieval failure | XML artefact is not created | Secret, reference ID or report access issue | Validate the Workday secret and report permissions |
-| Claude generation failure | Generation tool returns an error | Secret, endpoint or model issue | Validate the Claude secret fields and network access |
-| Missing artefact | A later tool cannot read a file | Earlier tool failed or parameters changed | Keep process, persona, country and conversation ID consistent |
-| Invalid GTS table | CSV generation fails | Model output did not match the table contract | Inspect the Markdown artefact and correct the input or prompt |
-| Empty sub-process output | Empty values in sub-process JSON | No supported steps or validations were retrieved | Inspect the sub-process report and extraction artefacts |
-| Document URL failure | DOCX exists but no link is returned | Artefact path or platform storage issue | Confirm the file exists under `uploaded_artifacts/` |
-| Canvas delivery failure | Document generated but not posted | Environment, recipient ID or Canvas secret issue | Validate the selected Canvas secret and recipient ID |
+```text
+{process}_{persona}_{country}_{conversation}_workday_bp_xml.txt
+{process}_{persona}_{country}_{conversation}_validations.txt
+```
 
-### Assumptions, Risks and Gaps
+### 8.2 Tool: `GTS_for_EUTM`
 
-**Facts:**
-- The solution contains nine Agent Manager tools.
-- The tools use `core` for secrets and artefacts.
-- Tool hand-offs depend on conversation-scoped filenames.
-- The final output is a Word document.
-- No local runner or `.env` file is required.
+**Purpose:** Generate GTS Markdown and CSV content from the Workday XML.
 
-**Assumptions:**
-- Agent Manager registers each extensionless file as a Python tool.
-- Workspace-specific agent, node, edge and tool IDs are created in the target environment.
+**Attributes:**
 
-**Risks and gaps:**
-- No automated tests are included.
-- Dependency versions are not pinned.
-- Parameter naming and capitalisation vary between tools, including `conversationid` versus `conversation_id` and uppercase `Process`/`Persona` versus lowercase values.
-- Artefact naming is tightly coupled between sequential tools.
-- The workflow depends on configured Quasar metadata and Workday report paths.
-- Large responses may still be affected by platform limits even though continuation is supported.
+| Name | Type | Description |
+|---|---|---|
+| `conversationid` | str | Same conversation identifier used by the preceding stage |
+| `process` | str | Workday Business Process name |
+| `persona` | str | Initiating Security Group |
+| `country` | str | Country or regional scope |
 
-### Business Value
+**Packages:**
 
-The EUTM agent standardises training-document generation across Business Processes, roles and supported countries. It combines source process evidence with controlled generation rules so the final document reads as business-user training material rather than technical or test documentation.
+```text
+typing
+core
+uuid
+re
+json
+requests
+io
+pandas
+```
 
-The workflow also provides repeatable artefact naming, traceable intermediate outputs and delivery through the same Canvas conversation used to initiate the request.
+**Expected outputs:**
 
-### Executive Summary
+```text
+{process}_{persona}_{country}_markdown_gts_{conversation}.txt
+{process}_{country}_{persona}TestCaseGenerated_{conversation}.csv
+```
 
-The **EUTM Agent** is an Agent Manager workflow that creates Workday End-User Training Material for a selected process, country and initiating role. It retrieves the live process definition, generates structured scenario content, filters relevant steps, produces the main training material, adds supported sub-process instructions and creates a downloadable Word document.
+### 8.3 Tool: `combined_code`
 
-The solution consists of nine extensionless Python tool modules and an Agent Manager manifest. It uses the platform `core` SDK for secrets and artefacts, integrates with Quasar, Workday, Claude and Canvas, and passes data between tools through conversation-scoped files.
+**Purpose:** Retrieve the matching supporting training or job-aid content.
 
-The package is designed specifically for Agent Manager. It does not require a VS Code runner, local environment file, web server or standalone deployment process.
+**Attributes:**
 
+| Name | Type | Description |
+|---|---|---|
+| `process` | str | Workday Business Process name |
+| `persona` | str | User persona |
+| `conversation_id` | str | Conversation identifier |
+| `country` | str | Country or regional scope |
+
+**Packages:**
+
+```text
+typing
+core
+uuid
+re
+json
+requests
+```
+
+**Expected output:**
+
+```text
+{process}_{persona}_{country}_{conversation}_indexfile_content.txt
+```
+
+### 8.4 Tool: `segregate_by_country`
+
+**Purpose:** Create the country-scoped main Business Process steps.
+
+**Attributes:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | str | Conversation identifier |
+| `persona` | str | Initiating Security Group |
+| `country` | str | USA, US, AU, GB, IE, GBIE or Global |
+| `process` | str | Workday Business Process name |
+
+**Packages:**
+
+```text
+typing
+core
+uuid
+re
+json
+html
+lxml
+```
+
+**Expected output:**
+
+```text
+{country}_{persona}_{process}_{conversation}_country_segregation.json
+```
+
+### 8.5 Tool: `claude_call_for_main_bp`
+
+**Purpose:** Generate the main Business Process EUTM content.
+
+**Attributes:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | str | Conversation identifier |
+| `process_steps` | str | Hand-off from the preceding Utility Agent |
+| `Process` | str | Workday Business Process name |
+| `Persona` | str | Initiating Security Group |
+| `country` | str | Country or regional scope |
+
+**Packages:**
+
+```text
+typing
+core
+uuid
+re
+json
+requests
+io
+pandas
+```
+
+**Expected output:**
+
+```text
+{Process}_{Persona}_{country}_{conversation}_EUTM_response.txt
+```
+
+### 8.6 Tool: `combined_code_for_sub_bp`
+
+**Purpose:** Retrieve sub-process definitions and create aligned segregation and validation files.
+
+**Attributes:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | str | Conversation identifier |
+| `persona` | str | Initiating Security Group |
+| `country` | str | Country or regional scope |
+| `process` | str | Main Workday Business Process name |
+
+**Packages:**
+
+```text
+typing
+core
+uuid
+re
+json
+html
+requests
+lxml
+```
+
+**Expected outputs:**
+
+```text
+{process}_{country}_{persona}_{conversation}_sub_bp_report.json
+{process}_{country}_{persona}_{conversation}_segregation_sub_bp.json
+{process}_{country}_{persona}_{conversation}_validation_sub_bp.json
+```
+
+### 8.7 Tool: `claude_call_for_subbp_three`
+
+**Purpose:** Generate the EUTM content for the supported sub-processes.
+
+**Attributes:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | str | Conversation identifier |
+| `persona` | str | Initiating Security Group |
+| `country` | str | Country or regional scope |
+| `process` | str | Main Workday Business Process name |
+
+**Packages:**
+
+```text
+typing
+core
+uuid
+re
+json
+requests
+```
+
+**Expected output:**
+
+```text
+{process}_{persona}_{country}_{conversation}_sub_bp_tasks.json
+```
+
+### 8.8 Tool: `document_generation_final`
+
+**Purpose:** Merge the generated content and create the final EUTM Word document.
+
+**Attributes:**
+
+| Name | Type | Description |
+|---|---|---|
+| `usecase` | str | Use `EUTM` |
+| `conversation_id` | str | Conversation identifier |
+| `Persona` | str | Initiating Security Group |
+| `country` | str | Country or regional scope |
+| `process` | str | Workday Business Process name |
+
+**Packages:**
+
+```text
+typing
+core
+uuid
+re
+json
+io
+docx
+```
+
+**Expected output:**
+
+```text
+{process}_{Persona}_for_{country}_{conversation}_EUTM_Document.docx
+```
+
+### 8.9 Tool: `workday_send_msg_to_canvas`
+
+**Purpose:** Deliver the final document link to Canvas.
+
+**Attributes:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | str | Canvas conversation identifier |
+| `message` | str | Message containing the final document link |
+| `environment` | str | dev, demo, stagetest or prod |
+| `recipient_id` | str | Recipient identifier when required |
+
+**Packages:**
+
+```text
+typing
+core
+json
+requests
+```
+
+## 9. Validate the Tools
+
+Use one consistent test set for the entire validation:
+
+```text
+process: Create Position
+persona: Personnel Leader
+country: AU
+conversation_id: one shared non-production conversation ID
+usecase: EUTM
+environment: approved non-production environment
+```
+
+Run the tools individually in the documented order.
+
+After every tool run:
+
+1. Confirm the tool completed successfully.
+2. Confirm the expected output file was created.
+3. Confirm the filename contains the expected process, persona, country and conversation ID.
+4. Confirm the next tool can locate the file.
+5. Review errors before continuing.
+6. Do not continue with guessed or manually fabricated intermediate content.
+
+## 10. Create the Utility Agents
+
+After all tools are available, open the **Utility Agents** section and create the following Utility Agents.
+
+For each Utility Agent:
+
+1. Create a new Utility Agent.
+2. Use the exact name shown below.
+3. Enter a short description of the stage.
+4. Add the tool or tools listed for that Utility Agent.
+5. Configure the tool input mapping.
+6. Save the Utility Agent.
+7. Run an independent test where possible.
+
+### 10.1 Utility Agent: `Trigger for Aldi`
+
+**Tools:**
+
+```text
+trigger_for_aldi
+```
+
+**Configuration:** Pass `process`, `conversation_id`, `requester_user_email_id`, `environment`, `country` and `persona` from the runtime input to the tool without changing them.
+
+### 10.2 Utility Agent: `GTS for EUTM`
+
+**Tools:**
+
+```text
+GTS_for_EUTM
+```
+
+**Configuration:** Pass `process`, `persona`, `country` and the same conversation identifier used by the preceding stage. Map it to the tool's `conversationid` attribute.
+
+### 10.3 Utility Agent: `Combined Code Agent 2`
+
+**Tools:**
+
+```text
+combined_code
+segregate_by_country
+```
+
+**Required order:**
+
+```text
+1. combined_code
+2. segregate_by_country
+```
+
+**Configuration:** Reuse the exact same process, persona, country and conversation ID for both tools.
+
+### 10.4 Utility Agent: `Generate_document_for_BP`
+
+**Tools:**
+
+```text
+claude_call_for_main_bp
+```
+
+**Configuration:**
+
+- Pass `conversation_id` from the runtime input.
+- Map the user's process value to `Process`.
+- Map the user's persona value to `Persona`.
+- Pass `country` unchanged.
+- Pass the preceding Utility Agent's output to `process_steps` without rewriting it.
+
+### 10.5 Utility Agent: `Combined Code for Sub BP`
+
+**Tools:**
+
+```text
+combined_code_for_sub_bp
+```
+
+**Configuration:** Pass `conversation_id`, `persona`, `country` and `process` unchanged.
+
+### 10.6 Utility Agent: `claude call for subbp three`
+
+**Tools:**
+
+```text
+claude_call_for_subbp_three
+```
+
+**Configuration:** Pass `conversation_id`, `persona`, `country` and `process` unchanged.
+
+### 10.7 Utility Agent: `document_generation_entire_EUTM`
+
+**Tools:**
+
+```text
+document_generation_final
+workday_send_msg_to_canvas
+```
+
+**Required order:**
+
+```text
+1. document_generation_final
+2. workday_send_msg_to_canvas
+```
+
+**Configuration:**
+
+- Set `usecase` to `EUTM`.
+- Map the user process to `process`.
+- Map the user persona to `Persona`.
+- Pass the same `country` and `conversation_id`.
+- Read the download link returned by `document_generation_final`.
+- Include that link in the `message` passed to `workday_send_msg_to_canvas`.
+- Pass `environment` and `recipient_id` from the runtime input.
+
+## 11. Create the Super Agent
+
+Open the **Super Agents** section and create a new Super Agent.
+
+### Super Agent Details
+
+| Field | Value |
+|---|---|
+| Name | `GTS for EUTM` |
+| Description | Generates country- and initiating-role-specific Workday End-User Training Material and returns the final Word document through Canvas. |
+| Maximum messages | Use the approved value for the target environment |
+| Tags | Workday |
+
+### Add the Utility Agents
+
+Add the Utility Agents in this exact order:
+
+```text
+Start
+  -> Trigger for Aldi
+  -> GTS for EUTM
+  -> Combined Code Agent 2
+  -> Generate_document_for_BP
+  -> Combined Code for Sub BP
+  -> claude call for subbp three
+  -> document_generation_entire_EUTM
+  -> End
+```
+
+Do not change the sequence. The tools exchange files through the platform's artefact storage, and each later stage depends on earlier output.
+
+### Super Agent Runtime Inputs
+
+| Input | Required | Purpose |
+|---|---|---|
+| `process` | Yes | Workday Business Process name |
+| `persona` | Yes | Initiating Security Group |
+| `country` | Yes | Country or regional scope |
+| `conversation_id` | Yes | Shared identifier used for file names and Canvas delivery |
+| `requester_user_email_id` | As required | Requester context |
+| `environment` | Yes for delivery | Selects the Canvas environment |
+| `recipient_id` | Environment dependent | Canvas recipient |
+
+Preserve these values exactly across all Utility Agents. Do not translate, abbreviate, reformat or substitute them.
+
+## 12. End-to-End Validation
+
+Run the completed Super Agent with a valid non-production input combination.
+
+### Validation Checkpoints
+
+| Stage | Expected result |
+|---|---|
+| Trigger for Aldi | Workday XML and validation files are created |
+| GTS for EUTM | GTS Markdown and CSV are created |
+| Combined Code Agent 2 | Supporting content and country segregation files are created |
+| Generate_document_for_BP | Main EUTM text begins with `# Business Process` |
+| Combined Code for Sub BP | Sub-process report, segregation and validation files are created |
+| claude call for subbp three | Sub-process task JSON is created and keys remain aligned |
+| document_generation_entire_EUTM | Final DOCX is created and a download link is returned |
+| Canvas delivery | The document link appears in the originating Canvas conversation |
+
+### Validation Rules
+
+- Stop at the first failed stage.
+- Check the expected filename before reviewing downstream tools.
+- Confirm the same conversation ID was used throughout.
+- Confirm required documents exist in Uploaded Artifacts.
+- Confirm credentials exist in Secret Manager.
+- Confirm all tools are approved and available to their Utility Agents.
+- Do not bypass a failed stage with manually created files.
+
+## 13. Artefact Naming Contract
+
+The following names must remain consistent:
+
+```text
+{process}_{persona}_{country}_{conversation}_workday_bp_xml.txt
+{process}_{persona}_{country}_{conversation}_validations.txt
+{process}_{persona}_{country}_markdown_gts_{conversation}.txt
+{process}_{country}_{persona}TestCaseGenerated_{conversation}.csv
+{process}_{persona}_{country}_{conversation}_indexfile_content.txt
+{country}_{persona}_{process}_{conversation}_country_segregation.json
+{Process}_{Persona}_{country}_{conversation}_EUTM_response.txt
+{process}_{country}_{persona}_{conversation}_sub_bp_report.json
+{process}_{country}_{persona}_{conversation}_segregation_sub_bp.json
+{process}_{country}_{persona}_{conversation}_validation_sub_bp.json
+{process}_{persona}_{country}_{conversation}_sub_bp_tasks.json
+{process}_{Persona}_for_{country}_{conversation}_EUTM_Document.docx
+```
+
+A change to any naming pattern must be applied to every tool that writes or reads that file.
+
+## 14. Dependencies
+
+| Dependency | Purpose |
+|---|---|
+| `core` | Secret Manager and artefact access |
+| `requests` | Quasar, Workday, model and Canvas calls |
+| `pandas` | CSV and Excel processing |
+| `lxml` | Workday XML parsing |
+| `python-docx` | Word document generation |
+| `json`, `re`, `io`, `uuid`, `html`, `typing` | Standard processing support |
+
+## 15. Security and Governance
+
+- Keep all passwords, tokens, API keys and endpoint configuration in Secret Manager.
+- Keep all supporting documents in Uploaded Artifacts.
+- Do not print secret values or tokens.
+- Do not include secrets in test screenshots.
+- Do not include runtime IDs in reusable documentation.
+- Do not store presigned URLs in source control.
+- Complete validation, scanning and approval before adding a tool to a Utility Agent.
+- Use a non-production environment for the first complete test.
+
+## 16. Troubleshooting
+
+| Problem | Likely cause | Resolution |
+|---|---|---|
+| Tool is not available in Utility Agent | Tool was not saved, approved or published | Complete the tool lifecycle and refresh the Utility Agent tool list |
+| Secret cannot be retrieved | Secret name or field name differs from the source | Correct the entry in Secret Manager |
+| Uploaded file cannot be found | Filename differs or file is not in Uploaded Artifacts | Upload the file with the exact expected name |
+| Workday XML is missing | Process reference, credentials or report access failed | Validate the trigger tool and Workday Secret Manager entry |
+| GTS output is missing | XML file was not found or generation failed | Check the preceding stage and expected filename |
+| Country JSON is empty | Country input or filtering condition does not match | Validate country value and inspect the Workday conditions |
+| Main EUTM generation fails | One or more required files are absent | Confirm GTS, validation, country and supporting-content files |
+| Sub-process output is incomplete | Sub-process definitions or validations were not retrieved | Inspect sub-process report and JSON files |
+| DOCX has unresolved task markers | Main task markers and sub-process JSON keys do not match | Align the exact task names across both outputs |
+| Canvas delivery fails | Environment secret or recipient mapping is incorrect | Validate the Canvas Secret Manager entry and delivery inputs |
+| Wrong file is read | Different runtime values generated a different filename | Reuse the same process, persona, country and conversation ID |
+
+## 17. Migration to Another Agent Manager Environment
+
+When rebuilding the agent in another environment:
+
+1. Export or copy the nine tool definitions.
+2. Export or document the seven Utility Agent configurations.
+3. Export or document the Super Agent sequence.
+4. Recreate the required Secret Manager entries without copying secret values into files.
+5. Upload the required documents to Uploaded Artifacts.
+6. Revalidate every tool.
+7. Reattach the tools to the Utility Agents.
+8. Recreate the Super Agent sequence.
+9. Run the full validation checklist.
+10. Confirm Canvas delivery in the destination environment.
+
+## 18. Executive Summary
+
+The EUTM solution is built in GenWizard Agent Manager using a clear three-level structure:
+
+1. Python scripts are converted into **Tools**.
+2. The Tools are assigned to **Utility Agents** for the individual stages of the workflow.
+3. The Utility Agents are assembled into the **GTS for EUTM Super Agent**.
+
+All sensitive credentials and endpoint values are maintained in **Secret Manager**. All required documents and supporting files are stored in **Uploaded Artifacts**.
+
+By following this README in order, a builder can create, validate and connect the complete EUTM agent without using a local VS Code runner or embedding sensitive configuration in the source code.
